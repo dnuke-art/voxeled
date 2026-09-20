@@ -5,7 +5,7 @@ import { sub, matVec, eulerMatrix, transpose3 } from "./vec.mjs";
 
 // `sources` (src/input/sources.mjs): live external streams merged over the internal show — the
 // pattern renders only for the pixels no live source covers.
-export function createHub({ scene, shade, pattern, fps = 30, bus = null, senders = [], sources = null, poses = null } = {}) {
+export function createHub({ scene, shade, pattern, fps = 30, bus = null, senders = [], sources = null, poses = null, t0: t0In = null } = {}) {
   const render = shade ?? pattern; // `shade` is the general name; `pattern` kept for one-pattern use
   const N = scene.pixels.length;
   const rgb = new Uint8Array(N * 3); // the normalized frame: flat RGB, 0..255
@@ -49,11 +49,12 @@ export function createHub({ scene, shade, pattern, fps = 30, bus = null, senders
     ctx,
     renderOnce: () => renderFrame(0),
     start() {
-      t0 = Date.now();
+      t0 = t0In ?? Date.now(); // a rebuilt hub keeps the old clock: the show doesn't restart when a fixture joins
       timer = setInterval(() => renderFrame((Date.now() - t0) / 1000), 1000 / fps);
     },
     stop() { if (timer) clearInterval(timer); timer = null; },
     get frames() { return frames; },
+    get t0() { return t0; },
     get merge() { return last; },
     // an instance moved (src/poses.mjs createMover): refresh its inverse transform for fixture-space patterns
     reposition(k) { const it = scene.meta.instances[k]; if (it) inst[k] = { pos: it.pos || [0, 0, 0], rotInv: transpose3(eulerMatrix(it.rotDeg || [0, 0, 0])) }; },

@@ -31,6 +31,13 @@
     background: var(--panel); border: 1px solid var(--line); border-radius: 14px; cursor: pointer; }
   #auto.on { background: var(--pink); border-color: var(--pink); color: #1a0410; }
   #empty { color: var(--dim); font-size: 14px; padding: 14px; border: 1px dashed var(--line); border-radius: 14px; }
+  #join { display:none; margin-top:16px; }
+  #join.on { display:block; }
+  #joinbtn { width:100%; min-height:64px; font-size:17px; font-weight:800; color:#1a0410; background:var(--pink); border:0; border-radius:14px; cursor:pointer; }
+  #joinbtn.on { background:var(--panel); color:var(--ink); border:1px solid var(--line); }
+  #pixel { display:none; margin-top:12px; height: 38vh; border-radius: 18px; border: 1px solid var(--line); background:#000; transition: background 80ms linear; }
+  #pixel.on { display:block; }
+  #pixel span { display:block; padding:10px 12px; font-size:12px; color:rgba(255,255,255,0.75); text-shadow:0 1px 2px #000; }
   #wand { display:none; }
   #wand.on { display:block; }
   #plan { width:100%; aspect-ratio: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; touch-action: none; display:block; }
@@ -56,6 +63,10 @@
   <div class="ab"><span>◂ <b id="a">A</b></span><span><b id="b">B</b> ▸</span></div>
   <input id="fader" type="range" min="0" max="1" step="0.005" value="0" />
   <button id="auto" class="on">⟳ Auto-crossfade</button>
+</div>
+<div id="join">
+  <button id="joinbtn">✦ join the piece — become a pixel</button>
+  <div id="pixel"><span id="ptext">you are pixel —</span></div>
 </div>
 <div id="wand">
   <div class="label">Wand — you are the light</div>
@@ -113,11 +124,12 @@ $("auto").addEventListener("click", () => send($("auto").classList.contains("on"
 //    piece; orientation = the phone's gyro/compass; sent over the bus as {type:"pose"} at ≤ 30 Hz.
 //    The hub moves any instance tracking this phone and patterns (lantern lampFrom, point, paint)
 //    read it. Enabled when the layout has a `trackers:` entry with source: phone.
-const wand = { on: false, id: null, tracker: null, ws: null, plan: null, pos: null, bearing: 0, pitch: 0, forward: 0, hasMotion: false, last: 0, dirty: false };
-function wandSetup(scene) {
-  const tr = (scene.meta?.trackers || []).find((t) => t.source === "phone");
-  if (!tr) return;
-  wand.on = true; wand.tracker = tr; wand.id = new URLSearchParams(location.search).get("wand") || tr.name;
+const wand = { on: false, id: null, tracker: null, ws: null, plan: null, pos: null, bearing: 0, pitch: 0, forward: 0, hasMotion: false, last: 0, dirty: false, joined: null, sceneMeta: null };
+const PARAMS = new URLSearchParams(location.search);
+function wandSetup(scene, trackerOverride = null) {
+  const tr = trackerOverride || (scene.meta?.trackers || []).find((t) => t.source === "phone");
+  if (!tr || wand.on) return;
+  wand.on = true; wand.tracker = tr; wand.id = trackerOverride ? tr.name : (PARAMS.get("wand") || tr.name);
   $("wand").classList.add("on");
   const insts = scene.meta.instances || [];
   const xs = insts.map((i) => i.pos[0]), zs = insts.map((i) => i.pos[2]);
@@ -156,13 +168,7 @@ function wandSetup(scene) {
     $("motion").classList.add("on"); $("motion").textContent = "motion on";
   });
   $("face").addEventListener("click", () => { wand.forward = wand.bearing; wand.dirty = true; draw(); });
-  function connect() {
-    const ws = new WebSocket(`ws://${location.host}/bus`); ws.binaryType = "arraybuffer";
-    ws.onopen = () => { wand.ws = ws; $("wstat").textContent = `wand "${wand.id}" live · drag to move · point the phone`; };
-    ws.onclose = () => { wand.ws = null; setTimeout(connect, 1500); };
-    ws.onmessage = () => {}; // frames come too; ignore them here
-  }
-  connect();
+  busConnect();
   setInterval(() => {
     if (!wand.ws || wand.ws.readyState !== 1 || !wand.dirty) return;
     wand.dirty = false;
@@ -173,9 +179,57 @@ function wandSetup(scene) {
   addEventListener("resize", draw); draw(); wand.dirty = true;
 }
 
+// One bus socket for everything the phone sends and hears: poses out; frames (our pixel's
+// colour), welcome and scene changes in.
+let busPending = null;
+function busConnect() {
+  if (wand.ws || busPending) return;
+  const ws = busPending = new WebSocket(`ws://${location.host}/bus`); ws.binaryType = "arraybuffer";
+  ws.onopen = () => { wand.ws = ws; busPending = null; if (wand.on) $("wstat").textContent = `wand "${wand.id}" live · drag to move · point the phone`; if (wand.joined) sendHello(); };
+  ws.onclose = () => { wand.ws = null; busPending = null; setTimeout(busConnect, 1500); };
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === "string") {
+      let m; try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.type === "welcome" && wand.joined && m.id === wand.joined.id) { wand.joined.index = m.index; $("ptext").textContent = `you are pixel ${m.index} of ${m.total.toLocaleString()} · drag yourself on the plan`; }
+      else if (m.type === "error" && m.of === "hello") { $("ptext").textContent = `can't join: ${m.error}`; }
+      return;
+    }
+    if (wand.joined && wand.joined.index != null) { const d = new Uint8Array(ev.data), i = wand.joined.index * 3; if (i + 2 < d.length) $("pixel").style.background = `rgb(${d[i]},${d[i + 1]},${d[i + 2]})`; }
+  };
+}
+
+// ── join: this phone becomes a pixel of the piece (a `dot` fixture at the wand's position) ──
+function sendHello() {
+  if (!wand.ws || wand.ws.readyState !== 1 || !wand.joined) return;
+  wand.ws.send(JSON.stringify({ type: "hello", id: wand.joined.id, fixture: { type: wand.sceneMeta?.join?.fixture || "dot" }, track: true, ttlS: 30, pos: wand.pos ? wand.pos.map((v) => +v.toFixed(1)) : undefined }));
+}
+function joinSetup(scene) {
+  wand.sceneMeta = scene.meta;
+  if (!scene.meta?.join?.enabled) return;
+  $("join").classList.add("on");
+  let saved = ""; try { saved = localStorage.getItem("voxeled.phone.id") || ""; } catch {}
+  const id = saved || `phone-${Math.random().toString(36).slice(2, 6)}`;
+  try { localStorage.setItem("voxeled.phone.id", id); } catch {}
+  const join = () => {
+    wand.joined = { id, index: null };
+    wandSetup(scene, { name: id, source: "phone", heightMM: scene.meta.join.heightMM ?? 1200, aim: [0, 1, 0] }); // the wand UI, tracking us
+    busConnect(); sendHello();
+    $("joinbtn").classList.add("on"); $("joinbtn").textContent = "✕ leave the piece"; $("pixel").classList.add("on");
+  };
+  const leave = () => {
+    if (wand.ws && wand.ws.readyState === 1) wand.ws.send(JSON.stringify({ type: "bye", id }));
+    wand.joined = null; $("joinbtn").classList.remove("on"); $("joinbtn").textContent = "✦ join the piece — become a pixel"; $("pixel").classList.remove("on");
+  };
+  $("joinbtn").addEventListener("click", () => (wand.joined ? leave() : join()));
+  setInterval(() => { if (wand.joined && wand.ws?.readyState === 1) wand.ws.send(JSON.stringify({ type: "heartbeat", id })); }, 10000);
+  addEventListener("pagehide", () => { if (wand.joined && wand.ws?.readyState === 1) wand.ws.send(JSON.stringify({ type: "bye", id })); });
+  if (PARAMS.get("join") === "1") join();
+}
+
 async function boot() {
   try {
     const scene = await (await fetch("scene.json")).json();
+    joinSetup(scene);
     wandSetup(scene);
     $("name").textContent = scene.name;
     scenes = scene.meta?.show?.scenes || [];

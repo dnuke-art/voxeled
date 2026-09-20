@@ -34,6 +34,9 @@ export const FIXTURES = {
   rope: (params) => ropeFixture(params),
   // A flexible matrix panel rolled into a column (8×32 panels, 1–3 end to end in a diffuser tube): src/fixtures/tube.mjs.
   //   { type: tube, params: { cols: 8, rows: 32, panels: 3, pitchMM: 10, seamMM: 10 } }
+  // One pixel at the origin — a phone that joined as a pixel (its screen shows the colour), a single lamp.
+  // Normal +Z (out of a screen); with the phone's pose (+Y = its top edge) a flat phone faces up.
+  dot: (params) => withEmitter({ pixels: [{ i: 0, p: [0, 0, 0], n: [0, 0, 1], s: 0, v: 0 }], meta: { source: "dot", pitchMM: params.sizeMM || 70, points: 1 } }, params.emitter || { viewingAngleDeg: 160, sizeFrac: 1, coreFrac: 0.9, softness: 0.8, gain: 1.4, glow: 1.0 }),
   tube: (params) => (params.emitter ? withEmitter(tubeFixture(params), params.emitter) : tubeFixture(params)),
   // A baked fixture file (.vxl.json) — what the Blender addon and the Grasshopper component write,
   // or a scene from `vox import`. Must carry normals (`vox check` enforces it).

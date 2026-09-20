@@ -75,7 +75,7 @@ in over ~1 s), the **crossfader**, and the **auto** toggle. It's a thin client o
 seam — the same one the viewer's crossfader uses — polling every 1.5 s so several phones (and
 auto mode) stay in sync, and the hub keeps running the show if the phone walks away. This is the
 first slice of the roadmap's *hosted & public* phase: hosted is the same seam behind a public URL.
-`layouts/wand.yaml` turns the phone page into a **wand**: drag yourself on the floor plan, enable motion, point the phone — the wand instance moves in the 3D view and the lantern/torch/paint scenes follow it (see `docs/GUIDE.md` §13). **V** stands at a site vantage (a 360° backdrop wrapped around the camera — `layouts/site.yaml`, `?stand=<name>&bearing=&pitch=&fov=`; see `docs/FORMAT.md` § Site context).
+On any layout the phone page can **join the piece** (one tap, or `phone.html?join=1`): the phone becomes a one-pixel `dot` fixture showing the pattern colour at its position, and a wand. `layouts/wand.yaml` also turns the phone page into a **wand** for a fixed tracker: drag yourself on the floor plan, enable motion, point the phone — the wand instance moves in the 3D view and the lantern/torch/paint scenes follow it (see `docs/GUIDE.md` §13). **V** stands at a site vantage (a 360° backdrop wrapped around the camera — `layouts/site.yaml`, `?stand=<name>&bearing=&pitch=&fov=`; see `docs/FORMAT.md` § Site context).
 
 `VOX_NO_QR=1` hides the code; the QR encoder is dependency-free (`src/qr.mjs`, verified by
 decoding with OpenCV in the tests).

@@ -27,6 +27,7 @@ example (the Thread sculpture). The short docs each cover one part; this is the 
 | **patch / output** | where a fixture's pixels are sent: protocol + address (Art-Net universe, DDP offset, dan-mx…). Per fixture or per instance; one installation can mix protocols. |
 | **show** | the scenes (pattern + params) the hub crossfades between. |
 | **tracker / pose** | where a thing *is* — a wand, a phone, a PSN tag: position + orientation, live. An instance with `track:` follows one (a **moving fixture**); patterns read poses (a lantern in someone's hand). |
+| **join** | a device (a wand, a phone that scanned the QR) announcing itself while the show runs and being added live — geometry, patch, tracker — nothing else renumbered, no restart. |
 | **input** | an external stream that drives pixels — Art-Net, sACN, DDP, TCP, or a page on the bus — with a priority and a timeout; several run at once and **merge** over the show. |
 | **baked** | evaluated and stored as a plain list of pixels — no recipe left inside. A `.vxl.json` is baked; a `rope` or `array` in a layout is procedural. See [§8](#8-baking-and-export). |
 
@@ -378,6 +379,15 @@ show:
     - { name: torch,   pattern: point,   params: { from: wand-1, spreadDeg: 14 } }
     - { name: paint,   pattern: paint,   params: { from: wand-1, radiusMM: 600, decayS: 8 } }
 ```
+
+**Joining live.** None of that has to be in the layout up front. While the show runs, a device
+sends `{"type":"hello", id, fixture:{type, params}, output, track: true}` on the bus (or
+`POST /instances`) and is appended — its pixels after everyone else's, the show clock untouched,
+inputs still bound — and removed by `bye` or silence (`ttlS`). The phone page does this with one
+tap: **join the piece — become a pixel**. The phone is a `dot` fixture (one pixel = its screen,
+which shows the pattern's colour at wherever the phone is on the floor plan) *and* a wand. Scan
+the hub's QR, tap join, drag yourself into the room, wave. `join: false` in a layout closes it;
+`join: { max, ttlS, fixture }` tunes it.
 
 Where poses come from: **the phone** (open `phone.html` — a floor plan of the piece appears; drag
 yourself on it, *enable motion*, tap *face the piece = forward*, then point the phone like a wand),

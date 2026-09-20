@@ -168,6 +168,8 @@ export function resolveLayout(doc, { fixtures = {}, patterns = {}, baseDir = nul
   const inputs = resolveInputs(doc.inputs);
   // Trackers: where things are (src/poses.mjs). An instance with `track:` follows one.
   const trackers = resolveTrackers(doc.trackers);
+  // Join: may devices (wands, phones) announce themselves and be added while the show runs?
+  const join = doc.join === false ? { enabled: false } : { enabled: true, fixture: doc.join?.fixture || "dot", ttlS: doc.join?.ttlS ?? 30, heightMM: doc.join?.heightMM ?? 1200, max: doc.join?.max ?? 64 };
   for (const inst of instances) if (inst.track && !trackers.some((t) => t.name === inst.track)) throw new Error(`instance "${inst.name}" tracks "${inst.track}" but there is no such tracker (trackers: ${trackers.map((t) => t.name).join(", ") || "none"})`);
   const merge = doc.merge ? { mode: doc.merge.mode || "priority", fallback: doc.merge.fallback || "show", timeoutMs: doc.merge.timeoutMs ?? 1000 } : undefined;
 
@@ -182,6 +184,7 @@ export function resolveLayout(doc, { fixtures = {}, patterns = {}, baseDir = nul
       ...(vantages.length ? { vantages } : {}),
       ...(inputs.length ? { inputs } : {}),
       ...(trackers.length ? { trackers } : {}),
+      join,
       ...(merge ? { merge } : {}),
     },
   });

@@ -14,14 +14,14 @@ export function createInputs({ specs = [], merge = {}, scene, bus = null, onCont
   const N = scene.count ?? scene.pixels.length;
   const sources = createSources({ N, ...merge });
   const handles = [], list = [];
-  let wsSpec = null, wsMap = null, wsSource = null;
+  let wsSpec = null, wsEntry = null, wsSource = null;
   for (const spec of specs) {
     const src = sources.add(spec.name, { priority: spec.priority, timeoutMs: spec.timeoutMs });
-    const entry = { ...spec, covered: N };
+    const entry = { ...spec, covered: N, map: null };
     if (spec.protocol === "artnet" || spec.protocol === "sacn") {
       const map = buildInputMap(spec.map, N);
-      entry.covered = map.covered; entry.universes = map.universes.length;
-      const onDmx = (u, data) => src.writeUniverse(map, u, data);
+      entry.map = map; entry.covered = map.covered; entry.universes = map.universes.length;
+      const onDmx = (u, data) => src.writeUniverse(entry.map, u, data);
       const h = spec.protocol === "artnet"
         ? createArtNetInput({ port: spec.port, host: spec.host, onDmx, name: scene.name })
         : createSacnInput({ port: spec.port, host: spec.host, universes: spec.universes || map.universes, onDmx });
@@ -35,16 +35,24 @@ export function createInputs({ specs = [], merge = {}, scene, bus = null, onCont
       handles.push(createColorInput({ port: spec.port, host: spec.host, onFrame: (rgb) => src.writeFrame(rgb) }));
     } else if (spec.protocol === "ws") {
       if (wsSpec) throw new Error("only one `ws` input (the bus) per layout");
-      wsSpec = spec; wsSource = src; wsMap = buildInputMap(spec.map, N);
+      wsSpec = spec; wsSource = src; entry.map = buildInputMap(spec.map, N); wsEntry = entry;
     }
     list.push(entry);
+  }
+
+  // The scene changed (a fixture joined / left, a layout edit with the same inputs): keep every
+  // socket bound and every source's history; resize the buffers and rebuild the universe maps.
+  function rescene(newScene) {
+    const n = newScene.count ?? newScene.pixels.length;
+    sources.resize(n);
+    for (const e of list) if (e.map) { e.map = buildInputMap(e.map.spec ?? specs.find((s) => s.name === e.name)?.map, n); e.covered = e.map.covered; e.universes = e.map.universes.length; }
   }
 
   // The bus as an input: binary = a frame (raw RGB in scene order) or Art-Net packets; text = JSON.
   function onMessage({ socket, binary, text }) {
     if (binary) {
       if (!wsSource) return;
-      if (binary.length >= 12 && binary.subarray(0, 8).toString("latin1") === "Art-Net\0") { for (const p of eachArtNet(binary)) if (p.op === OP_DMX) wsSource.writeUniverse(wsMap, p.universe, p.data); }
+      if (binary.length >= 12 && binary.subarray(0, 8).toString("latin1") === "Art-Net\0") { for (const p of eachArtNet(binary)) if (p.op === OP_DMX) wsSource.writeUniverse(wsEntry.map, p.universe, p.data); }
       else wsSource.writeFrame(binary);
       return;
     }
@@ -59,7 +67,7 @@ export function createInputs({ specs = [], merge = {}, scene, bus = null, onCont
   }
 
   return {
-    sources, list, onMessage, wsInput: !!wsSpec,
+    sources, list, onMessage, rescene, specs, wsInput: !!wsSpec,
     status() { return { mode: sources.mode, fallback: sources.fallback, inputs: list.map((e, i) => ({ name: e.name, protocol: e.protocol, port: e.port, priority: e.priority, covered: e.covered, universes: e.universes, ...sources.status()[i] })) }; },
     close() { for (const h of handles) h.close(); },
   };

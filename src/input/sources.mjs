@@ -9,7 +9,8 @@
 // Pixels no live source covers fall back to `fallback`: the internal show (default), black, or
 // hold (keep the last output). A source goes silent after `timeoutMs` without data, so a sender
 // that dies hands its pixels back — that is the failover.
-export function createSources({ N, mode = "priority", fallback = "show", timeoutMs = 1000 } = {}) {
+export function createSources({ N: N0, mode = "priority", fallback = "show", timeoutMs = 1000 } = {}) {
+  let N = N0;
   if (!["priority", "htp", "ltp"].includes(mode)) throw new Error(`merge mode must be priority | htp | ltp (got "${mode}")`);
   if (!["show", "black", "hold"].includes(fallback)) throw new Error(`merge fallback must be show | black | hold (got "${fallback}")`);
   const list = [];
@@ -89,8 +90,19 @@ export function createSources({ N, mode = "priority", fallback = "show", timeout
     return { live: live.map((s) => s.name), covered };
   }
 
+  // The scene changed size (a fixture joined or left): grow/shrink every source's buffers in place.
+  function resize(n) {
+    if (n === N) return;
+    for (const s of list) {
+      const grow = (old, len, T) => { const b = new T(len); b.set(old.subarray(0, Math.min(old.length, len))); return b; };
+      s.buf = grow(s.buf, n * 3, Uint8Array); s.mask = grow(s.mask, n, Uint8Array); s.stamp = grow(s.stamp, n, Uint32Array);
+    }
+    N = n;
+  }
+
   return {
-    add, compose, list, mode, fallback,
+    add, compose, list, mode, fallback, resize,
+    get N() { return N; },
     get(name) { return list.find((s) => s.name === name); },
     status() { return list.map((s) => ({ name: s.name, priority: s.priority, live: s.live, rate: s.rate, writes: s.writes, lastAt: s.lastAt })); },
   };

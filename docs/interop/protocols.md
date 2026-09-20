@@ -119,6 +119,14 @@ Where things *are* is an input too. `trackers:` in the layout names them; an ins
 
 `/poses` lists trackers and their live poses.
 
+**Joining live.** `{"type":"hello", id, fixture | fixtureName, output?, pos?, rotDeg?, track?, ttlS?}` on
+the bus (or `POST /instances`) appends a fixture to the running scene and answers
+`{"type":"welcome", id, instance, index, count, total}`; `{"type":"bye"}` / `DELETE /instances?name=` /
+silence past `ttlS` (poses, `{"type":"heartbeat"}` refresh it) remove it. Existing pixel indices never
+move; the hub's clock, crossfade, and bound inputs continue. An ESP32 wand: connect to `ws://hub:8080/bus`,
+send hello with its geometry and `output: { protocol: ddp, host: <its ip> }`, then poses — it gets its own
+pixels back over DDP.
+
 ## dan-mx — the opinionated dialect
 
 [dan-mx](https://github.com/dnewcome/dan-mx) is the same pixel-streaming idea as DDP, redesigned with

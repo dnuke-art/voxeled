@@ -133,6 +133,23 @@ A pose is `pos` (mm) + `rotDeg` (Z·Y·X, like instances); the registry also der
 rotated into the world). Viewers get `{type:"pose"}` messages and animate the instance; `/poses`
 reports every tracker. Patterns: `lantern { lampFrom }`, `point { from }`, `paint { from }`.
 
+## Join — fixtures that arrive while the show runs
+
+```yaml
+join: { fixture: dot, ttlS: 30, heightMM: 1200, max: 64 }     # default: open; `join: false` closes it
+```
+
+A device announces itself on the bus — `{"type":"hello","id":"wand-3","fixture":{"type":"rope","params":{…}},"output":{…},"pos":[…],"track":true,"ttlS":30}`
+— or via `POST /instances` (same JSON; `?save=1` writes it into the layout) and is **appended** to
+the running scene: its geometry (an inline fixture, or `fixtureName` from the layout), its patch,
+and a tracker of its own if `track: true`. Every existing pixel index is untouched, the hub's
+clock and crossfade continue, inputs stay bound with their history. The device gets
+`{"type":"welcome","id","instance","index","count","total"}` — a phone that joined as a `dot`
+(the default join fixture: one pixel, its screen) reads its colour from the bus frames at
+`index`. `{"type":"bye"}`, `DELETE /instances?name=`, or silence past `ttlS` (poses and
+`{"type":"heartbeat"}` keep it alive) remove it. `GET /instances` lists instances with their
+first pixel index and whether they joined.
+
 ## Emitter — how the LEDs emit (simulation)
 
 The map says where each LED is and which way it faces; the **emitter profile** says how it *emits*,
