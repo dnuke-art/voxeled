@@ -1,0 +1,41 @@
+# voxeled layout — WAND: the eight columns plus a hand-held wand that participants carry through
+# the installation. The wand is a 60-LED strip on a stick (its own ESP32 gets its pixels over
+# Wi-Fi) AND a tracker: its pose moves the wand's LEDs in the world and drives the patterns —
+# a lantern in your hand (columns light toward you), a torch beam (aim at a column, it lights),
+# a paintbrush (whatever you wave near stays lit and fades).
+#
+# The pose comes from wherever you have it: this layout uses a PHONE (open phone.html, scan the
+# QR — drag yourself on the floor plan, point the phone). Swap `source: phone` for `ws` (any JSON
+# {type:"pose"} on the bus — an ESP32 wand with an IMU, a camera tracker) or `psn` (PosiStageNet).
+
+name: wand
+units: mm
+trackers:
+  - { name: wand-1, source: phone, heightMM: 1200 }     # the phone page becomes this tracker
+fixtures:
+  column:
+    type: tube
+    params: { cols: 8, rows: 32, panels: 3, pitchMM: 10, seamMM: 10 }
+    output: { protocol: artnet, byteOrder: grb }
+  wand:
+    type: rope
+    params: { path: [[0, 0, 0], [0, 600, 0]], count: 60, radiusMM: 8, angleDeg: 0 }   # 60 px up a 600 mm stick (+Y = its aim)
+    output: { protocol: ddp, host: wand-1.local }
+instances:
+  - { fixture: column, name: c0, pos: [0, 0, 0],         output: { universe: 0 } }
+  - { fixture: column, name: c1, pos: [2200, 0, 600],    output: { universe: 5 } }
+  - { fixture: column, name: c2, pos: [3100, 0, -1800],  output: { universe: 10 } }
+  - { fixture: column, name: c3, pos: [900, 0, -2900],   output: { universe: 15 } }
+  - { fixture: column, name: c4, pos: [-1700, 0, -2100], output: { universe: 20 } }
+  - { fixture: column, name: c5, pos: [-2800, 0, 400],   output: { universe: 25 } }
+  - { fixture: column, name: c6, pos: [-1300, 0, 2500],  output: { universe: 30 } }
+  - { fixture: column, name: c7, pos: [1400, 0, 3000],   output: { universe: 35 } }
+  - { fixture: wand,   name: wand-1, pos: [0, 1200, 4500], track: wand-1 }            # follows the tracker
+show:
+  holdS: 8
+  fadeS: 2
+  scenes:
+    - { name: lantern in your hand, pattern: lantern, params: { lampFrom: wand-1, falloffMM: 3000 } }
+    - { name: torch — aim at a column, pattern: point, params: { from: wand-1, spreadDeg: 14 } }
+    - { name: paint — wave it near,   pattern: paint, params: { from: wand-1, radiusMM: 600, decayS: 8 } }
+    - { name: helix,                  pattern: helix }

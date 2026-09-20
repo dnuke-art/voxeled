@@ -6,7 +6,7 @@ example (the Thread sculpture). The short docs each cover one part; this is the 
 
 - [Concepts](#1-concepts) · [Frames & units](#2-frames-and-units) · [The layout file](#3-the-layout-file)
 - [Getting geometry in](#4-getting-geometry-in) · [Structures](#5-structures--the-body-of-the-piece) · [Placing LEDs on a structure](#6-placing-leds-on-a-structure-paths-and-ropes)
-- [The builder](#7-the-builder) · [Baking & export](#8-baking-and-export) · [Running](#9-running-the-hub) · [Site context](#12-site-context-the-piece-in-the-world)
+- [The builder](#7-the-builder) · [Baking & export](#8-baking-and-export) · [Running](#9-running-the-hub) · [Site context](#12-site-context-the-piece-in-the-world) · [Moving fixtures & wands](#13-moving-fixtures-and-wands)
 - [Worked example: Thread](#10-worked-example-thread) · [Gotchas](#11-gotchas)
 
 ---
@@ -26,6 +26,7 @@ example (the Thread sculpture). The short docs each cover one part; this is the 
 | **emitter** | how a fixture's LEDs *emit* (viewing angle, body size, diffusion…) — what the simulator renders. |
 | **patch / output** | where a fixture's pixels are sent: protocol + address (Art-Net universe, DDP offset, dan-mx…). Per fixture or per instance; one installation can mix protocols. |
 | **show** | the scenes (pattern + params) the hub crossfades between. |
+| **tracker / pose** | where a thing *is* — a wand, a phone, a PSN tag: position + orientation, live. An instance with `track:` follows one (a **moving fixture**); patterns read poses (a lantern in someone's hand). |
 | **input** | an external stream that drives pixels — Art-Net, sACN, DDP, TCP, or a page on the bus — with a priority and a timeout; several run at once and **merge** over the show. |
 | **baked** | evaluated and stored as a plain list of pixels — no recipe left inside. A `.vxl.json` is baked; a `rope` or `array` in a layout is procedural. See [§8](#8-baking-and-export). |
 
@@ -354,6 +355,35 @@ instances:                                    # Z-up model → voxeled's Y-up
 - **Scene-level structures** don't move with fixtures; per-fixture ones do.
 - **Data order is addressing.** Generators and importers define it (chaining, curve order, list
   order); `vox check` flags a scrambled order.
+
+## 13. Moving fixtures and wands
+
+A tracked instance is re-placed from its fixture-local geometry every time its tracker's pose
+arrives, so everything downstream just works: world patterns sweep over the wand where it *is*,
+its own LEDs are lit and patched like any fixture, it occludes in the simulator. And a pose is a
+control: `lantern { lampFrom }` puts the lamp in someone's hand (columns light toward them),
+`point { from }` is a torch beam (aim at a column, it lights), `paint { from }` leaves trails on
+whatever is waved near.
+
+```yaml
+trackers:
+  - { name: wand-1, source: phone }        # or ws (any JSON pose on the bus) or psn (PosiStageNet)
+fixtures:
+  wand: { type: rope, params: { path: [[0,0,0],[0,600,0]], count: 60, radiusMM: 8 }, output: { protocol: ddp, host: wand-1.local } }
+instances:
+  - { fixture: wand, name: wand-1, track: wand-1 }
+show:
+  scenes:
+    - { name: lantern, pattern: lantern, params: { lampFrom: wand-1 } }
+    - { name: torch,   pattern: point,   params: { from: wand-1, spreadDeg: 14 } }
+    - { name: paint,   pattern: paint,   params: { from: wand-1, radiusMM: 600, decayS: 8 } }
+```
+
+Where poses come from: **the phone** (open `phone.html` — a floor plan of the piece appears; drag
+yourself on it, *enable motion*, tap *face the piece = forward*, then point the phone like a wand),
+**any client on the bus** (`{"type":"pose","id":"wand-1","pos":[x,y,z],"rotDeg":[rx,ry,rz]}` — an
+ESP32 wand with an IMU, a camera tracker), or **PosiStageNet** (`source: psn`). Try it:
+`node examples/mobius-heart/run.mjs examples/mobius-heart/layouts/wand.yaml`, scan the QR.
 
 ## 12. Site context: the piece in the world
 

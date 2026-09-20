@@ -134,10 +134,13 @@ export function helix({ turns = 1, pitch = 3, speed = 0.5, width = 0.35, hue = 0
 // of every column glows, the far side stays dark, and the lit crescent walks around each tube as
 // the lamp passes — nothing a linear array can do. `path: orbit | eight`, radius defaults to the
 // installation's floor radius, height in mm; `ambient` keeps the far sides just visible.
-export function lantern({ path = "orbit", radiusMM = null, heightMM = 1200, speed = 20, falloffMM = 4000, hue = 0.09, sat = 0.55, ambient = 0.03, gain = 2.5 } = {}) {
+// `lampFrom: <tracker>` puts the lamp in someone's hand (a phone, a wand): ctx.poses (src/poses.mjs).
+export function lantern({ path = "orbit", radiusMM = null, heightMM = 1200, speed = 20, falloffMM = 4000, hue = 0.09, sat = 0.55, ambient = 0.03, gain = 2.5, lampFrom = null, offsetMM = 0 } = {}) {
   return (px, t, ctx) => {
     const F = sceneFrame(ctx), R = radiusMM ?? F.floorR * 0.8, a = (t * speed * Math.PI) / 180;
-    const L = path === "eight"
+    const held = lampFrom && ctx.poses?.get(lampFrom);
+    const L = held ? [held.pos[0] + held.aim[0] * offsetMM, held.pos[1] + held.aim[1] * offsetMM, held.pos[2] + held.aim[2] * offsetMM]
+      : path === "eight"
       ? [F.c[0] + R * Math.sin(a), heightMM, F.c[2] + R * Math.sin(2 * a) * 0.6]
       : [F.c[0] + R * Math.cos(a), heightMM, F.c[2] + R * Math.sin(a)];
     const d = [L[0] - px.p[0], L[1] - px.p[1], L[2] - px.p[2]], dist = Math.hypot(d[0], d[1], d[2]) || 1;
@@ -173,4 +176,40 @@ export function drops({ rate = 0.6, speed = 0.5, lengthS = 0.15, spin = 2, hue =
   };
 }
 
-export const PATTERNS = { ribbonChase, worldWipe, planeSweep, normalRGB, spotlight, projector, helix, lantern, swirl, drops };
+// A torch beam from a tracked thing: aim a wand (or a phone) at a column and it lights. Pixels
+// within `spreadDeg` of the tracker's aim ray glow, brightest on the axis, fading with distance;
+// the side facing the wand is lit more than the far side (normal · direction to the wand).
+export function point({ from, spreadDeg = 12, reachMM = 8000, hue = 0.16, sat = 0.5, gain = 1.6, ambient = 0 } = {}) {
+  const cosSpread = Math.cos((spreadDeg * Math.PI) / 180);
+  return (px, t, ctx) => {
+    const P = from && ctx.poses?.get(from);
+    if (!P) return hsv(hue, sat, ambient);
+    const d = [px.p[0] - P.pos[0], px.p[1] - P.pos[1], px.p[2] - P.pos[2]], dist = Math.hypot(d[0], d[1], d[2]) || 1;
+    const c = (d[0] * P.aim[0] + d[1] * P.aim[1] + d[2] * P.aim[2]) / dist;                  // cos angle off the aim ray
+    if (c < cosSpread) return hsv(hue, sat, ambient);
+    const beam = (c - cosSpread) / (1 - cosSpread);
+    const facing = Math.max(0.15, -(px.n[0] * d[0] + px.n[1] * d[1] + px.n[2] * d[2]) / dist); // the side facing the wand
+    const fall = 1 / (1 + (dist / reachMM) ** 2);
+    return hsv(hue, sat, clamp01(ambient + gain * beam * facing * fall));
+  };
+}
+
+// A paintbrush: whatever a tracked thing is waved near stays lit and fades. Stateful per pattern
+// instance (a last-touched time per pixel), keyed on the pixel index — the hub renders every pixel
+// each frame, so the stamp is refreshed as the wand passes.
+export function paint({ from, radiusMM = 500, decayS = 6, hue = 0.85, hueDrift = 0.05, sat = 0.9 } = {}) {
+  let stamp = null, hues = null;
+  return (px, t, ctx) => {
+    const N = ctx.scene.pixels.length;
+    if (!stamp || stamp.length !== N) { stamp = new Float32Array(N).fill(-1e9); hues = new Float32Array(N); }
+    const P = from && ctx.poses?.get(from);
+    if (P) {
+      const dist = Math.hypot(px.p[0] - P.pos[0], px.p[1] - P.pos[1], px.p[2] - P.pos[2]);
+      if (dist < radiusMM) { stamp[px.i] = t; hues[px.i] = hue + t * hueDrift; }
+    }
+    const age = t - stamp[px.i];
+    return age < 0 ? [0, 0, 0] : hsv(hues[px.i], sat, clamp01(Math.exp(-age / decayS)));
+  };
+}
+
+export const PATTERNS = { ribbonChase, worldWipe, planeSweep, normalRGB, spotlight, projector, helix, lantern, swirl, drops, point, paint };

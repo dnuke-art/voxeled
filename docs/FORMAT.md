@@ -107,6 +107,32 @@ merge: { mode: priority, fallback: show, timeoutMs: 1000 }
 
 Details and the wire behaviour: [interop/protocols.md](interop/protocols.md#inputs-and-merge--several-streams-driving-one-piece).
 
+## Trackers — moving fixtures and things people carry
+
+```yaml
+trackers:
+  - { name: wand-1, source: phone, heightMM: 1200 }                    # phone.html: floor-plan drag + gyro
+  - { name: hand,   source: ws }                                        # any client: {"type":"pose","id":"hand","pos":[x,y,z],"rotDeg":[rx,ry,rz]}
+  - { name: tag,    source: psn, port: 56565, group: 236.10.10.10, id: 3, up: y }   # PosiStageNet tracker (id or name)
+instances:
+  - { fixture: wand, name: wand-1, track: wand-1 }                      # follows the tracker: its LEDs move in the world
+show:
+  scenes:
+    - { name: lantern, pattern: lantern, params: { lampFrom: wand-1 } } # patterns read poses too
+```
+
+| field | default | meaning |
+|---|---|---|
+| `source` | `ws` | `ws` (pose JSON on the bus) · `phone` (the phone page becomes this tracker) · `psn` (PosiStageNet) |
+| `aim` | `[0, 1, 0]` | the tracker's pointing axis in its own frame (a stick's +Y) |
+| `heightMM` | 1200 | phone: the wand's height above the floor |
+| `id`, `port`, `group`, `scaleToMM`, `up` | first tracker, 56565, 236.10.10.10, 1000, `y` | psn: which PSN tracker (numeric id or name), where, and its units/axes |
+| instance `track` | — | the instance's `pos`/`rotDeg` follow this tracker (re-placed from fixture-local geometry per pose) |
+
+A pose is `pos` (mm) + `rotDeg` (Z·Y·X, like instances); the registry also derives `aim` (the axis
+rotated into the world). Viewers get `{type:"pose"}` messages and animate the instance; `/poses`
+reports every tracker. Patterns: `lantern { lampFrom }`, `point { from }`, `paint { from }`.
+
 ## Emitter — how the LEDs emit (simulation)
 
 The map says where each LED is and which way it faces; the **emitter profile** says how it *emits*,

@@ -103,6 +103,22 @@ source's liveness and rate; the viewer's HUD shows it.
 `VOX_LISTEN=<port>` / `VOX_DDP_IN=<port>` are shorthands that add a `tcp` / `ddp` input at
 priority 100 — they now merge over the show instead of replacing it.
 
+## Poses — tracking in (PosiStageNet, the bus, the phone)
+
+Where things *are* is an input too. `trackers:` in the layout names them; an instance with
+`track:` follows one, and patterns read them (`lantern { lampFrom }`, `point`, `paint`).
+
+- **PosiStageNet** (`source: psn`) — the entertainment tracking protocol (BlackTrax, zactrack,
+  Stage Precision…): UDP multicast 236.10.10.10:56565, v2 data packets; tracker position (metres)
+  and orientation (axis-angle) become a pose; `id` picks a tracker by number or name, `up: z`
+  converts a Z-up system.
+- **The bus** (`source: ws`) — any WebSocket client sends `{"type":"pose","id":…,"pos":[mm],"rotDeg":[deg]}`;
+  the hub re-broadcasts poses (≤ 30 Hz per tracker) so every viewer animates the instance.
+- **The phone** (`source: phone`) — `phone.html` posts its own pose: position from a floor-plan
+  drag, orientation from the gyro/compass (pitch = tilt, yaw = compass, zeroed with *face the piece*).
+
+`/poses` lists trackers and their live poses.
+
 ## dan-mx — the opinionated dialect
 
 [dan-mx](https://github.com/dnewcome/dan-mx) is the same pixel-streaming idea as DDP, redesigned with

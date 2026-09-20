@@ -52,6 +52,7 @@ export function buildSceneFromLayout({ name, units = "mm", instances, meta = {} 
         ...(inst.output ? { output: inst.output } : {}),
         ...(inst.emitter ? { emitter: inst.emitter } : {}), // how this instance's LEDs emit (sim)
         ...(inst.src ? { src: inst.src } : {}),
+        ...(inst.track ? { track: inst.track } : {}), // a live pose drives this instance's transform
       })),
     },
   });
@@ -138,6 +139,7 @@ export function resolveLayout(doc, { fixtures = {}, patterns = {}, baseDir = nul
     const emitter = emitterSrc.length ? Object.assign({}, ...emitterSrc) : undefined;
     return {
       name: inst.name || `${inst.fixture}-${k + 1}`,
+      track: inst.track,
       fixtureName: inst.fixture,
       fixture,
       pos: inst.pos,
@@ -164,6 +166,9 @@ export function resolveLayout(doc, { fixtures = {}, patterns = {}, baseDir = nul
   const vantages = resolveVantages(doc.vantages, { baseDir, site });
   // Inputs: external streams that drive the piece, merged by priority/htp/ltp (src/input/index.mjs).
   const inputs = resolveInputs(doc.inputs);
+  // Trackers: where things are (src/poses.mjs). An instance with `track:` follows one.
+  const trackers = resolveTrackers(doc.trackers);
+  for (const inst of instances) if (inst.track && !trackers.some((t) => t.name === inst.track)) throw new Error(`instance "${inst.name}" tracks "${inst.track}" but there is no such tracker (trackers: ${trackers.map((t) => t.name).join(", ") || "none"})`);
   const merge = doc.merge ? { mode: doc.merge.mode || "priority", fallback: doc.merge.fallback || "show", timeoutMs: doc.merge.timeoutMs ?? 1000 } : undefined;
 
   const scene = buildSceneFromLayout({
@@ -176,6 +181,7 @@ export function resolveLayout(doc, { fixtures = {}, patterns = {}, baseDir = nul
       ...(site ? { site } : {}),
       ...(vantages.length ? { vantages } : {}),
       ...(inputs.length ? { inputs } : {}),
+      ...(trackers.length ? { trackers } : {}),
       ...(merge ? { merge } : {}),
     },
   });
@@ -190,7 +196,7 @@ export function resolveLayout(doc, { fixtures = {}, patterns = {}, baseDir = nul
     show = { scenes, holdS: doc.show.holdS ?? 4, fadeS: doc.show.fadeS ?? 2.5 };
   }
 
-  return { scene, show };
+  return { scene, show, resolved: instances };
 }
 
 export const INPUT_PROTOCOLS = { artnet: 6454, sacn: 5568, ddp: 4048, tcp: 9600, ws: null };
@@ -207,6 +213,21 @@ export function resolveInputs(list) {
     if (inp.host) out.host = inp.host;
     if (protocol === "artnet" || protocol === "sacn" || protocol === "ws") out.map = inp.map || {};
     if (protocol === "sacn" && inp.universes) out.universes = inp.universes;
+    return out;
+  });
+}
+
+export const TRACKER_SOURCES = ["ws", "phone", "psn"];
+export function resolveTrackers(list) {
+  const seen = new Set();
+  return (list || []).map((t, i) => {
+    const source = t.source || "ws";
+    if (!TRACKER_SOURCES.includes(source)) throw new Error(`tracker #${i}: source must be one of ${TRACKER_SOURCES.join(", ")} (got "${source}")`);
+    const name = t.name || `${source}-${i}`;
+    if (seen.has(name)) throw new Error(`duplicate tracker name "${name}"`);
+    seen.add(name);
+    const out = { name, source, aim: t.aim || [0, 1, 0], heightMM: t.heightMM ?? 1200 };
+    if (source === "psn") { out.port = t.port || 56565; out.group = t.group ?? "236.10.10.10"; out.id = t.id ?? null; out.scaleToMM = t.scaleToMM ?? 1000; out.up = t.up || "y"; }
     return out;
   });
 }

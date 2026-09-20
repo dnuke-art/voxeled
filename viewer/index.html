@@ -491,6 +491,29 @@ function applyMode() {
   $("h-model").textContent = n ? `${structures.length}/${n} · ${["translucent", "opaque", "hidden"][modelMode]}` : "—";
 }
 
+// ── poses: tracked things (wands, phones, PSN tags) — move their instances, draw a marker ──────
+const trackerMarks = new Map();
+function onPose(m) {
+  for (const k of m.instances || []) {
+    const tf = instTf[k];
+    if (!tf) continue;
+    tf.pos = m.pos.slice(); tf.rotDeg = m.rotDeg.slice(); tf.R = eulerMatrix(tf.rotDeg);
+    placeInstance(k);
+  }
+  let mk = trackerMarks.get(m.id);
+  if (!mk) {
+    const g = new THREE.Group(); g.name = `tracker:${m.id}`;
+    g.add(new THREE.Mesh(new THREE.SphereGeometry(40, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffcf4d })));
+    const aim = new THREE.Mesh(new THREE.ConeGeometry(25, 300, 10), new THREE.MeshBasicMaterial({ color: 0xffcf4d, transparent: true, opacity: 0.6 }));
+    aim.position.set(0, 150, 0); g.add(aim);                                   // the tracker's +Y (its aim axis) as a cone
+    scene3.add(g); mk = g; trackerMarks.set(m.id, g);
+  }
+  mk.position.set(m.pos[0], m.pos[1], m.pos[2]);
+  mk.rotation.set(m.rotDeg[0] * D2R, m.rotDeg[1] * D2R, m.rotDeg[2] * D2R, "ZYX");
+  mk.userData.t = performance.now();
+}
+setInterval(() => { for (const g of trackerMarks.values()) g.visible = performance.now() - g.userData.t < 5000; }, 1000);
+
 // ── inputs: which external streams are live (polled; the merge happens in the hub) ───────────
 setInterval(async () => {
   if (!scene?.meta?.inputs?.length) return;
@@ -527,7 +550,7 @@ function connectBus() {
   ws.onclose = () => { $("h-dot").classList.remove("live"); $("h-bus").lastChild.textContent = "closed"; setTimeout(connectBus, 1000); };
   ws.onmessage = (ev) => {
     if (typeof ev.data === "string") { // control message from the hub
-      try { const m = JSON.parse(ev.data); if (m.type === "scene") reloadScene(); } catch {}
+      try { const m = JSON.parse(ev.data); if (m.type === "scene") reloadScene(); else if (m.type === "pose") onPose(m); } catch {}
       return;
     }
     if (!mesh) return;

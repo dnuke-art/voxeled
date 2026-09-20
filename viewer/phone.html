@@ -31,6 +31,13 @@
     background: var(--panel); border: 1px solid var(--line); border-radius: 14px; cursor: pointer; }
   #auto.on { background: var(--pink); border-color: var(--pink); color: #1a0410; }
   #empty { color: var(--dim); font-size: 14px; padding: 14px; border: 1px dashed var(--line); border-radius: 14px; }
+  #wand { display:none; }
+  #wand.on { display:block; }
+  #plan { width:100%; aspect-ratio: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; touch-action: none; display:block; }
+  #wand .row { display:flex; gap:10px; margin-top:10px; }
+  #wand button { flex:1; min-height:48px; font-size:14px; font-weight:700; color:var(--ink); background:var(--panel); border:1px solid var(--line); border-radius:14px; cursor:pointer; }
+  #wand button.on { background: var(--pink); border-color: var(--pink); color:#1a0410; }
+  #wstat { color: var(--dim); font-size: 12px; margin-top: 8px; min-height: 16px; }
   footer { color:#56688a; font-size: 11px; margin-top: 22px; text-align:center; }
   footer a { color: #8fd0ff; text-decoration: none; }
 </style>
@@ -49,6 +56,12 @@
   <div class="ab"><span>◂ <b id="a">A</b></span><span><b id="b">B</b> ▸</span></div>
   <input id="fader" type="range" min="0" max="1" step="0.005" value="0" />
   <button id="auto" class="on">⟳ Auto-crossfade</button>
+</div>
+<div id="wand">
+  <div class="label">Wand — you are the light</div>
+  <canvas id="plan"></canvas>
+  <div class="row"><button id="motion">enable motion</button><button id="face">face the piece = forward</button></div>
+  <div id="wstat">drag yourself on the floor plan · point the phone like a wand</div>
 </div>
 <footer>the hub keeps running the show if you close this · <a href="/">3D view</a></footer>
 
@@ -96,9 +109,74 @@ function render() {
 $("fader").addEventListener("input", () => { if (ramp) { clearInterval(ramp); ramp = null; } send(`mode=manual&a=${state.a}&b=${state.b}&fader=${$("fader").value}`); });
 $("auto").addEventListener("click", () => send($("auto").classList.contains("on") ? `mode=manual&a=${state.a}&b=${state.b}&fader=${state.fader}` : "mode=auto"));
 
+// ── wand: this phone as a tracker. Position = where you drag yourself on a floor plan of the
+//    piece; orientation = the phone's gyro/compass; sent over the bus as {type:"pose"} at ≤ 30 Hz.
+//    The hub moves any instance tracking this phone and patterns (lantern lampFrom, point, paint)
+//    read it. Enabled when the layout has a `trackers:` entry with source: phone.
+const wand = { on: false, id: null, tracker: null, ws: null, plan: null, pos: null, bearing: 0, pitch: 0, forward: 0, hasMotion: false, last: 0, dirty: false };
+function wandSetup(scene) {
+  const tr = (scene.meta?.trackers || []).find((t) => t.source === "phone");
+  if (!tr) return;
+  wand.on = true; wand.tracker = tr; wand.id = new URLSearchParams(location.search).get("wand") || tr.name;
+  $("wand").classList.add("on");
+  const insts = scene.meta.instances || [];
+  const xs = insts.map((i) => i.pos[0]), zs = insts.map((i) => i.pos[2]);
+  const pad = 2500, lo = [Math.min(...xs) - pad, Math.min(...zs) - pad], hi = [Math.max(...xs) + pad, Math.max(...zs) + pad];
+  const span = Math.max(hi[0] - lo[0], hi[1] - lo[1]);
+  const c = $("plan"), ctx = c.getContext("2d");
+  wand.pos = [ (lo[0] + hi[0]) / 2, tr.heightMM, hi[1] - pad * 0.5 ];      // start on the near edge of the floor
+  const toPx = (x, z) => [((x - lo[0]) / span) * c.width, ((z - lo[1]) / span) * c.height];
+  const fromPx = (px, py) => [lo[0] + (px / c.width) * span, lo[1] + (py / c.height) * span];
+  function draw() {
+    const w = c.clientWidth; if (c.width !== w) { c.width = w; c.height = w; }
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.strokeStyle = "rgba(120,150,210,0.25)"; ctx.lineWidth = 1;
+    for (let g = Math.ceil(lo[0] / 1000) * 1000; g < hi[0]; g += 1000) { const [x] = toPx(g, 0); ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, c.height); ctx.stroke(); }
+    for (let g = Math.ceil(lo[1] / 1000) * 1000; g < hi[1]; g += 1000) { const [, y] = toPx(0, g); ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(c.width, y); ctx.stroke(); }
+    for (const i of insts) { if (i.track === wand.id) continue; const [x, y] = toPx(i.pos[0], i.pos[2]); ctx.fillStyle = "#ff5e87"; ctx.beginPath(); ctx.arc(x, y, 6, 0, 7); ctx.fill(); }
+    const [x, y] = toPx(wand.pos[0], wand.pos[2]);
+    const yaw = ((wand.forward - wand.bearing) * Math.PI) / 180;                 // local heading (−Z = forward = up on the plan)
+    ctx.strokeStyle = "#ffcf4d"; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - Math.sin(yaw) * 40, y - Math.cos(yaw) * 40); ctx.stroke();
+    ctx.fillStyle = "#ffcf4d"; ctx.beginPath(); ctx.arc(x, y, 10, 0, 7); ctx.fill();
+  }
+  let drag = false;
+  const move = (e) => { const r = c.getBoundingClientRect(); const [x, z] = fromPx(e.clientX - r.left, e.clientY - r.top); wand.pos[0] = x; wand.pos[2] = z; wand.dirty = true; draw(); };
+  c.addEventListener("pointerdown", (e) => { drag = true; c.setPointerCapture(e.pointerId); move(e); });
+  c.addEventListener("pointermove", (e) => { if (drag) move(e); });
+  c.addEventListener("pointerup", () => (drag = false));
+  const onOrient = (e) => {
+    const heading = e.webkitCompassHeading != null ? e.webkitCompassHeading : (e.alpha != null ? 360 - e.alpha : null); // compass bearing, clockwise
+    if (heading != null) wand.bearing = heading;
+    if (e.beta != null) wand.pitch = Math.max(-90, Math.min(90, e.beta));       // 0 = phone flat (aim horizontal), 90 = upright (aim up)
+    wand.hasMotion = true; wand.dirty = true;
+  };
+  $("motion").addEventListener("click", async () => {
+    try { if (typeof DeviceOrientationEvent !== "undefined" && DeviceOrientationEvent.requestPermission) await DeviceOrientationEvent.requestPermission(); } catch {}
+    addEventListener("deviceorientationabsolute", onOrient, true); addEventListener("deviceorientation", onOrient, true);
+    $("motion").classList.add("on"); $("motion").textContent = "motion on";
+  });
+  $("face").addEventListener("click", () => { wand.forward = wand.bearing; wand.dirty = true; draw(); });
+  function connect() {
+    const ws = new WebSocket(`ws://${location.host}/bus`); ws.binaryType = "arraybuffer";
+    ws.onopen = () => { wand.ws = ws; $("wstat").textContent = `wand "${wand.id}" live · drag to move · point the phone`; };
+    ws.onclose = () => { wand.ws = null; setTimeout(connect, 1500); };
+    ws.onmessage = () => {}; // frames come too; ignore them here
+  }
+  connect();
+  setInterval(() => {
+    if (!wand.ws || wand.ws.readyState !== 1 || !wand.dirty) return;
+    wand.dirty = false;
+    // rotDeg (Z·Y·X): aim axis +Y → rx = pitch − 90 makes a flat phone aim along −Z; ry = yaw from the compass
+    const rotDeg = [ +(wand.pitch - 90).toFixed(2), +((wand.forward - wand.bearing + 540) % 360 - 180).toFixed(2), 0 ];
+    wand.ws.send(JSON.stringify({ type: "pose", id: wand.id, pos: wand.pos.map((v) => +v.toFixed(1)), rotDeg }));
+  }, 33);
+  addEventListener("resize", draw); draw(); wand.dirty = true;
+}
+
 async function boot() {
   try {
     const scene = await (await fetch("scene.json")).json();
+    wandSetup(scene);
     $("name").textContent = scene.name;
     scenes = scene.meta?.show?.scenes || [];
     const single = scene.meta?.show?.single || scenes.length < 2;

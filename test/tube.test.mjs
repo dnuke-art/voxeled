@@ -43,7 +43,7 @@ const lo = Math.min(...scene.pixels.map((p) => p.p[1])), hi = Math.max(...scene.
 ok(lo === 0 && near(hi, 950), "every column stands on the ground (y from 0 to 950)");
 const uni = scene.meta.instances.map((i) => i.output.universe);
 ok(uni.join() === "0,5,10,15,20,25,30,35" && scene.meta.instances[0].output.protocol === "artnet", "each column gets its own 5-universe block over the fixture-level Art-Net patch");
-ok(show.scenes.length === 3, "show resolves");
+ok(show.scenes.length === 6, "the six-scene show resolves");
 
 console.log(`\n${fail === 0 ? "✅" : "❌"} tube: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

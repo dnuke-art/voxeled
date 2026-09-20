@@ -23,6 +23,8 @@ import { createArtNetSender } from "../../src/senders/artnet.mjs";
 import { createDDPSender } from "../../src/senders/ddp.mjs";
 import { createDispatcher } from "../../src/output/dispatch.mjs";
 import { createInputs } from "../../src/input/index.mjs";
+import { createPoses, createMover, parsePoseMessage } from "../../src/poses.mjs";
+import { createPSNInput, psnToPose } from "../../src/input/psn.mjs";
 import { qrEncode, qrToAscii } from "../../src/qr.mjs";
 import { structureRoutes } from "../../src/structures.mjs";
 import { vantageRoutes } from "../../src/site.mjs";
@@ -57,25 +59,28 @@ if (process.env.ARTNET) envSenders.push(createArtNetSender({ host: process.env.A
 if (process.env.DDP) envSenders.push(createDDPSender({ host: process.env.DDP }));
 
 // ── the live layout: doc → scene + show + hub, rebuilt on every edit ──────────────
-const state = { doc: null, header: "", scene: null, show: null, hub: null, dispatcher: null, inputs: null, lastWritten: null };
+const state = { doc: null, header: "", scene: null, show: null, hub: null, dispatcher: null, inputs: null, mover: null, psn: [], lastWritten: null };
+const poses = createPoses(); // tracked things (wands, phones, PSN tags) — survives layout reloads
 const routes = []; // mutated in place on every apply — the bus reads it per request
 const senders = () => (state.dispatcher ? [...envSenders, state.dispatcher] : envSenders);
 
 function build(doc) {
-  const { scene, show: showCfg } = resolveLayout(doc, { fixtures: FIXTURES, patterns: PATTERNS, baseDir: path.dirname(layoutPath) });
+  const { scene, show: showCfg, resolved } = resolveLayout(doc, { fixtures: FIXTURES, patterns: PATTERNS, baseDir: path.dirname(layoutPath) });
   const scenes = showCfg?.scenes?.length ? showCfg.scenes : [{ name: "chase", render: PATTERNS.ribbonChase() }];
   const show = createShow({ scenes, holdS: showCfg?.holdS ?? 4, fadeS: showCfg?.fadeS ?? 2.5, control });
   scene.meta.show = { scenes: show.names, single: !!single };
-  return { scene, show, shade: single ? single() : show.shade };
+  return { scene, show, shade: single ? single() : show.shade, resolved };
 }
 
 // Apply a layout doc: validate by building it, then swap the running scene/show/patch/routes.
 // Throws (and changes nothing) if the layout is invalid.
 function apply(doc, { announce = true } = {}) {
-  const { scene, show, shade } = build(doc);
+  const { scene, show, shade, resolved } = build(doc);
   state.hub?.stop();
   state.dispatcher?.close();
   state.inputs?.close();
+  for (const h of state.psn) h.close();
+  state.psn = [];
   state.doc = doc; state.scene = scene; state.show = show;
   state.dispatcher = (scene.meta.instances || []).some((i) => i.output?.protocol) ? createDispatcher(scene) : null;
   // Inputs: the layout's `inputs:` + env shorthands, merged per `merge:` (rebound on every reload).
@@ -89,16 +94,55 @@ function apply(doc, { announce = true } = {}) {
     { path: "/scene.json", content: JSON.stringify(scene), contentType: "application/json" },
     { path: "/control", handler: controlHandler },
     { path: "/layout", handler: layoutHandler },
+    { path: "/poses", handler: (req, res) => { res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" }); res.end(JSON.stringify({ trackers: state.scene.meta.trackers || [], poses: poses.status() })); } },
     { path: "/inputs", handler: (req, res) => { res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" }); res.end(JSON.stringify(state.inputs ? state.inputs.status() : { inputs: [] })); } },
     ...structRoutes,
     ...vantRoutes,
   );
-  state.hub = createHub({ scene, shade, fps: 30, bus, senders: senders(), sources: state.inputs?.sources || null });
+  state.hub = createHub({ scene, shade, fps: 30, bus, senders: senders(), sources: state.inputs?.sources || null, poses });
   state.hub.start();
+  // Moving fixtures: instances with `track:` follow a tracker's pose (src/poses.mjs).
+  state.mover = createMover({ scene, resolved });
+  for (const tr of scene.meta.trackers || []) {
+    if (poses.get(tr.name)) applyPose(poses.get(tr.name)); // a tracker we already know about: place its instances now
+    if (tr.source === "psn") {
+      const h = createPSNInput({ port: tr.port, group: tr.group, onTrackers: (trackers, names) => {
+        for (const t of Object.values(trackers)) {
+          const match = tr.id == null ? true : (String(t.id) === String(tr.id) || names[t.id] === tr.id);
+          if (!match) continue;
+          const pose = psnToPose(t, { scaleToMM: tr.scaleToMM, up: tr.up });
+          if (pose) onPose(tr.name, pose, "psn");
+          if (tr.id == null) break; // no id given: the first tracker in the packet is ours
+        }
+      } });
+      h.sock.on("error", (e) => console.error(`✗ tracker ${tr.name}: ${e.message}`));
+      state.psn.push(h);
+    }
+  }
   if (announce) bus.broadcastText({ type: "scene", count: scene.count, instances: scene.meta.instances.length });
 }
 
 // Control endpoint: the viewer's / phone's crossfader + auto toggle drive `control`.
+// A pose arrived for tracker `id`: record it, move every instance tracking it, tell the viewers.
+const poseSent = new Map(); // id → last broadcast time (≤ 30 Hz per tracker on the bus)
+function onPose(id, { pos, rotDeg }, source = "ws") {
+  const tr = (state.scene?.meta.trackers || []).find((t) => t.name === id);
+  const p = poses.set(id, { pos, rotDeg, aimAxis: tr?.aim, source });
+  applyPose(p);
+}
+function applyPose(p) {
+  const moved = [];
+  (state.scene?.meta.instances || []).forEach((it, k) => { if (it.track === p.id) { state.mover.place(k, p.pos, p.rotDeg); state.hub.reposition(k); moved.push(k); } });
+  const now = Date.now();
+  if (now - (poseSent.get(p.id) || 0) >= 33) { poseSent.set(p.id, now); bus.broadcastText({ type: "pose", id: p.id, pos: p.pos, rotDeg: p.rotDeg, instances: moved }); }
+}
+function handlePoseText(text) {
+  let m; try { m = JSON.parse(text); } catch { return false; }
+  const pose = parsePoseMessage(m);
+  if (!pose) return false;
+  try { onPose(pose.id, pose, "ws"); } catch (e) { console.warn(`pose ${pose.id}: ${e.message}`); }
+  return true;
+}
 function applyControl(k, v) {
   if (k === "mode") control.mode = v === "manual" ? "manual" : "auto";
   else if (k === "fader") control.fader = Math.max(0, Math.min(1, +v));
@@ -141,7 +185,7 @@ function layoutHandler(req, res, params) {
 }
 
 // ── boot ─────────────────────────────────────────────────────────────────────────
-const bus = createBus({ port: PORT, staticDir: path.join(HERE, "../../viewer"), routes, onMessage: (m) => state.inputs?.onMessage(m) }); // pages push frames / control in through the same socket
+const bus = createBus({ port: PORT, staticDir: path.join(HERE, "../../viewer"), routes, onMessage: (m) => { if (m.text && handlePoseText(m.text)) return; state.inputs?.onMessage(m); } }); // pages push frames, poses and control in through the same socket
 bus.server.on("error", (e) => {
   if (e.code === "EADDRINUSE") { console.error(`\n✗ port ${PORT} is already in use — another demo is likely running. Stop it, or run with PORT=<n>.`); process.exit(1); }
   throw e;
@@ -185,6 +229,7 @@ const outDesc = senders().length
   ? senders().map((s) => (s.kind === "dispatch" ? `patch[${s.summary.join(", ")}]` : `${s.kind}→${s.target}`)).join("  ")
   : "none (set ARTNET=host / DDP=host, or add per-fixture `output` in the layout)";
 console.log(`  output:  ${outDesc}`);
+if (scene.meta.trackers?.length) console.log(`  track:   ${scene.meta.trackers.map((t) => `${t.name} (${t.source}${t.source === "psn" ? ` ${t.group}:${t.port}` : ""}) → ${scene.meta.instances.filter((i) => i.track === t.name).map((i) => i.name).join(", ") || "patterns only"}`).join("  ·  ")}`);
 if (state.inputs) {
   const m = state.inputs.sources;
   console.log(`  inputs:  ${state.inputs.list.map((i) => `${i.name} (${i.protocol}${i.port ? " " + i.port : ""}, prio ${i.priority}${i.universes ? `, ${i.universes} universes` : ""}${i.covered < scene.count ? `, ${i.covered} px` : ""})`).join("  ·  ")}`);
@@ -201,6 +246,7 @@ if (bus.lanUrl && !process.env.VOX_NO_QR) {
 process.on("SIGINT", () => {
   state.hub?.stop();
   state.inputs?.close();
+  for (const h of state.psn) h.close();
   bus.close();
   for (const s of senders()) s.close();
   console.log("\nbye");
